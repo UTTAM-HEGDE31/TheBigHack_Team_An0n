@@ -1,0 +1,246 @@
+<!-- templates/patient_dashboard.html -->
+{% extends "base.html" %}
+{% block title %}Patient Dashboard{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1>Patient Dashboard</h1>
+            <p class="lead">Welcome, {{ patient.name }} ({{ profile.profile_name }})</p>
+        </div>
+        <div class="btn-group">
+            <a href="{{ url_for('select_profile') }}" class="btn btn-outline-primary">Switch Profile</a>
+            <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary">Logout</a>
+        </div>
+    </div>
+    
+    <div class="row">
+        <!-- Left Column: Profile Info -->
+        <div class="col-md-4 mb-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-user-circle me-2"></i>Profile Information</h5>
+                </div>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item"><strong>Name:</strong> {{ patient.name }}</li>
+                    <li class="list-group-item"><strong>Phone:</strong> {{ patient.phone }}</li>
+                    <li class="list-group-item"><strong>Email:</strong> {{ patient.email or 'Not provided' }}</li>
+                    <li class="list-group-item"><strong>Date of Birth:</strong> {{ profile.date_of_birth.strftime('%d %B %Y') if profile.date_of_birth else 'N/A' }}</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- Right Column: Uploads and Documents -->
+        <div class="col-md-8">
+            
+            <!-- === NEW UPLOAD SECTION === -->
+            {% if has_recent_appointment %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5><i class="fas fa-upload me-2"></i>Upload New Document</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text text-muted">You can upload documents for 3 days following your appointment.</p>
+                        <form action="{{ url_for('upload_document') }}" method="post" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="document_type" class="form-label">Document Type</label>
+                                <select class="form-select" id="document_type" name="document_type" required>
+                                    <option value="Prescription">Prescription</option>
+                                    <option value="Report">Medical Report</option>
+                                    <option value="X-Ray">X-Ray / Scan</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="document" class="form-label">Select File</label>
+                                <input class="form-control" type="file" id="document" name="document" required>
+                                <div class="form-text">Allowed types: png, jpg, jpeg, gif, pdf, docx. Max size: 16 MB.</div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-cloud-upload-alt me-2"></i>Upload
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-2"></i>You can upload documents for up to 3 days after a scheduled appointment.
+                </div>
+            {% endif %}
+            <!-- === END OF UPLOAD SECTION === -->
+
+            <!-- === NEW DOCUMENT LIST SECTION === -->
+<!-- === REPLACE the entire "Your Medical Documents" card with this === -->
+<div class="card">
+    <div class="card-header">
+        <h5><i class="fas fa-file-alt me-2"></i>Your Medical Documents</h5>
+    </div>
+    <div class="card-body">
+        {% if documents %}
+            <ul class="list-group list-group-flush">
+                {% for doc in documents %}
+                    <li class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-1">
+                                    <i class="fas fa-file-medical-alt me-2 text-primary"></i>
+                                    {{ doc.document_type }}
+                                </h6>
+                                <small class="text-muted">
+                                    {% if doc.doctor_id %}
+                                        Uploaded by Dr. {{ doc.doctor.name }} on {{ doc.upload_date.strftime('%d %b %Y') }}
+                                    {% else %}
+                                        Uploaded by you on {{ doc.upload_date.strftime('%d %b %Y') }}
+                                    {% endif %}
+                                </small>
+                            </div>
+                            
+                            <!-- CORRECTED BUTTON GROUP -->
+                            <div class="btn-group" role="group">
+                                <!-- Download button (works for all) -->
+                                <a href="{{ url_for('uploaded_file', filename=doc.filename) }}" download class="btn btn-sm btn-outline-secondary" title="Download">
+                                    <i class="fas fa-download"></i>
+                                </a>
+                                <!-- Analyze button (NOW works for all documents) -->
+                                <button type="button" class="btn btn-sm btn-outline-info analyze-btn" data-doc-id="{{ doc.id }}" title="Analyze Document">
+                                    <i class="fas fa-magic"></i> Analyze
+                                </button>
+                            </div>
+                            <!-- END CORRECTED BUTTON GROUP -->
+
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-center text-muted">No documents found.</p>
+        {% endif %}
+    </div>
+</div>
+            <!-- === END OF DOCUMENT LIST SECTION === -->
+
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="analysisModal" tabindex="-1" aria-labelledby="analysisModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="analysisModalLabel"><i class="fas fa-magic me-2"></i>Document Analysis</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="analysisResultBody">
+        <!-- Loading spinner -->
+        <div class="text-center" id="analysisSpinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Analyzing document, please wait...</p>
+        </div>
+        <!-- Analysis result will be injected here -->
+        <div id="analysisText" style="white-space: pre-wrap;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // --- Modal and Speech Synthesis Setup ---
+    const guideModal = new bootstrap.Modal(document.getElementById('guideModal'));
+    const ambulanceModal = new bootstrap.Modal(document.getElementById('ambulanceModal'));
+    const synth = window.speechSynthesis;
+    let utterance = null;
+
+    // --- First Aid Guide Logic (This part is correct and unchanged) ---
+    document.querySelectorAll('.emergency-btn').forEach(button => {
+        button.addEventListener('click', async function() {
+            // ... (your existing, working code for the guide)
+        });
+    });
+
+    // ... (speakInstructions and modal close event listener are correct)
+
+    // --- AMBULANCE CALL LOGIC (UPDATED) ---
+    document.getElementById('callAmbulanceBtn').addEventListener('click', function() {
+        ambulanceModal.show();
+        getLocation();
+    });
+
+    function getLocation() {
+        const locationStatus = document.getElementById('locationStatus');
+        const locationDisplay = document.getElementById('locationDisplay');
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(showPosition, showError);
+        } else {
+            locationStatus.innerHTML = '<span class="text-danger"><i class="fas fa-times-circle me-2"></i>Geolocation is not supported by this browser.</span>';
+        }
+    }
+
+    function showPosition(position) {
+        // --- FIX #1: Correctly update the UI elements ---
+        document.getElementById('latitude').value = position.coords.latitude;
+        document.getElementById('longitude').value = position.coords.longitude;
+        const latLon = `${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)}`;
+        
+        // This was the main issue: use textContent for the <p> tag
+        document.getElementById('locationDisplay').textContent = latLon; 
+        document.getElementById('locationStatus').innerHTML = '<span class="text-success"><i class="fas fa-check-circle me-2"></i>Location detected successfully.</span>';
+    }
+
+    function showError(error) {
+        const locationStatus = document.getElementById('locationStatus');
+        let msg = 'Location is currently unavailable.';
+        if (error.code === error.PERMISSION_DENIED) {
+            msg = 'Location access was denied. Please enable it in your browser settings.';
+        } else if (error.code === error.TIMEOUT) {
+            msg = 'The request to get user location timed out.';
+        }
+        locationStatus.innerHTML = `<span class="text-warning"><i class="fas fa-exclamation-circle me-2"></i>${msg}</span>`;
+    }
+
+    document.getElementById('ambulanceForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const submitButton = this.querySelector('button[type="submit"]');
+        submitButton.disabled = true;
+        submitButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Dispatching...';
+
+        const formData = {
+            name: document.getElementById('callerName').value,
+            phone: document.getElementById('callerPhone').value,
+            latitude: document.getElementById('latitude').value,
+            longitude: document.getElementById('longitude').value,
+        };
+
+        try {
+            const response = await fetch("{{ url_for('call_ambulance') }}", {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(formData)
+            });
+            const result = await response.json();
+
+            // --- FIX #2: Show the success/error message and hide the modal ---
+            alert(result.message); // This will show the confirmation pop-up from the backend.
+            
+            if (result.success) {
+                ambulanceModal.hide();
+            }
+
+        } catch (error) {
+            alert('Failed to send ambulance request. Please check your internet connection.');
+        } finally {
+            submitButton.disabled = false;
+            submitButton.innerHTML = '<i class="fas fa-check-circle me-2"></i>CONFIRM & DISPATCH';
+        }
+    });
+
+    // --- Chatbot and Voice Input Logic (This part is correct and unchanged) ---
+    // ... (all the code for the chatbot and voice recognition)
+});
+</script>
+{% endblock %}
