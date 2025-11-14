@@ -18,6 +18,9 @@ from PIL import Image
 from dotenv import load_dotenv
 import google.generativeai as genai # <-- KEEP ONLY ONE
 
+# --- Advanced Feature Imports (Mail, Scheduler) ---
+from flask_mail import Mail, Message
+from apscheduler.schedulers.background import BackgroundScheduler
 # --- App Configuration ---
 # ... (rest of your app.py file)
 
@@ -59,6 +62,18 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
+# --- Mail Config (Flask-Mail) ---
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'true').lower() in ['true', '1', 't']
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME'))
+mail = Mail(app)
+
+# --- APScheduler Config ---
+scheduler = BackgroundScheduler(timezone="UTC")
+scheduler.start()
 
 # --- Database Models (No Changes Here) ---
 class Hospital(db.Model):
@@ -158,6 +173,56 @@ def generate_password(length=8):
     return ''.join(random.choice(characters) for i in range(length))
 
 # --- ADD THIS NEW HELPER FUNCTION TO APP.PY ---
+# 3. HELPER FUNCTIONS (Email, AI, Scheduling)
+# ====================================================================
+
+def send_email(to_email, subject, template, **kwargs):
+    """Helper to send emails."""
+    if not app.config.get('MAIL_SERVER'):
+        print(f"Mail not configured. Would send to {to_email} with subject '{subject}'")
+        return
+    try:
+        msg = Message(subject, recipients=[to_email])
+        msg.html = render_template(template, **kwargs)
+        mail.send(msg)
+        print(f"Email sent to {to_email}")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+def schedule_appointment_reminders(appointment):
+    """Schedules email reminders for an appointment."""
+    try:
+        # Convert appointment time from 'HH:MM AM/PM' to a datetime object
+        appt_dt_str = f"{appointment.appointment_date} {appointment.appointment_time}"
+        appt_dt = datetime.strptime(appt_dt_str, '%Y-%m-%d %I:%M %p') # Use %I for 12-hour format
+        
+        # Schedule a reminder 24 hours before the appointment
+        reminder_time_24h = appt_dt - timedelta(hours=24)
+        if reminder_time_24h > datetime.now():
+            job_id = f'appt_{appointment.id}_reminder_24h'
+            scheduler.add_job(
+                func=send_email,
+                trigger='date',
+                run_date=reminder_time_24h,
+                args=[appointment.patient_email, 'Appointment Reminder', 'emails/reminder.html'],
+                kwargs={'appointment': appointment},
+                id=job_id,
+                replace_existing=True
+            )
+            print(f"Scheduled 24-hour reminder for appointment {appointment.id} at {reminder_time_24h}")
+
+    except Exception as e:
+        print(f"Error scheduling reminder for appointment {appointment.id}: {e}")
+
+def cancel_scheduled_reminders(appointment_id):
+    """Removes any scheduled jobs for a given appointment ID."""
+    job_id = f'appt_{appointment_id}_reminder_24h'
+    try:
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+            print(f"Removed scheduled reminders for cancelled appointment {appointment_id}")
+    except Exception as e:
+        print(f"Could not remove job {job_id}. It may have already run or not existed. Error: {e}")
 
 def get_ai_analysis(extracted_text: str) -> str:
     """
@@ -318,78 +383,127 @@ def get_doctors_for_hospital(hospital_id):
 # --- ADD this new route to your app.py ---
 # This route handles the form submission
 # --- REPLACE your old /book_appointment route with this ---
+# ====================================================================
+# FINAL AND COMPLETE BOOKING & CANCELLATION ROUTES
+# ====================================================================
+
 @app.route('/book_appointment', methods=['POST'])
 def book_appointment():
+    """
+    Handles the multi-step appointment booking form.
+    - Creates a new patient account if one doesn't exist.
+    - Creates the appointment record.
+    - Sends an immediate email confirmation.
+    - Schedules a future email reminder.
+    """
     try:
         data = request.get_json()
         phone = data['phone']
         email = data['email']
-        
-        # Check if patient already exists by phone or email
-        patient = Patient.query.filter((Patient.phone == phone) | (Patient.email == email)).first()
-        
-        # --- LOGIC CHANGE: We no longer need a generated password ---
-        # The password will be their Date of Birth string 'YYYY-MM-DD'
+        is_new_user = False
+
+        # Step 1: Find or Create the Patient
+        patient = Patient.query.filter(or_(Patient.phone == phone, Patient.email == email)).first()
         
         if not patient:
-            # --- This is a NEW patient, create an account for them ---
-            dob_string = data['dob'] # The password is the DOB string from the form
-            
+            is_new_user = True
+            dob_string = data.get('dob')
             if not dob_string:
                 return jsonify({'success': False, 'message': 'Date of Birth is required for new patients.'}), 400
 
             # Create the main patient record for login
-            new_patient = Patient(
-                name=data['firstName'] + ' ' + data.get('lastName', ''),
+            patient = Patient(
+                name=f"{data['firstName']} {data.get('lastName', '')}",
                 phone=phone,
                 email=email
             )
-            # --- CRITICAL CHANGE: Set password to the DOB string ---
-            new_patient.set_password(dob_string) 
-            db.session.add(new_patient)
-            
-            # --- CRITICAL FIX: Create the PatientProfile at the same time ---
-            # We need to flush to get the new_patient.id before committing
-            db.session.flush() 
-            
-            new_profile = PatientProfile(
-                profile_name=f"{new_patient.name}'s Profile",
+            patient.set_password(dob_string) # DOB string is the password
+            db.session.add(patient)
+            db.session.flush()  # Use flush to get the patient.id for the profile
+
+            # Create the associated patient profile
+            profile = PatientProfile(
+                profile_name=f"{patient.name}'s Profile",
                 date_of_birth=datetime.strptime(dob_string, '%Y-%m-%d').date(),
                 aadhar_no=data.get('aadhar') if data.get('aadhar') else None,
-                patient_id=new_patient.id
+                patient_id=patient.id
             )
-            db.session.add(new_profile)
-            patient = new_patient # Set the patient object to the newly created one
-        
-        # --- Create the appointment for either the new or existing patient ---
+            db.session.add(profile)
+
+        # Step 2: Create the Appointment
         new_appointment = Appointment(
-            patient_name=data['firstName'] + ' ' + data.get('lastName', ''),
+            patient_name=f"{data['firstName']} {data.get('lastName', '')}",
             patient_email=email,
             patient_phone=phone,
             appointment_date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-            appointment_time=data['time'],
+            appointment_time=data['time'], # Assumes format like '02:00 PM'
             reason_for_visit=data.get('reason', ''),
             doctor_id=data['doctorId'],
             patient_id=patient.id
         )
-        
         db.session.add(new_appointment)
-        db.session.commit()
-        
-        # --- LOGIC CHANGE: Update the response to the user ---
+        db.session.commit()  # Commit to get the final new_appointment.id
+
+        # Step 3: Trigger Notifications
+        # We run this in a try-except so a notification failure doesn't break the booking
+        try:
+            # Send immediate email confirmation
+            send_email(
+                to_email=new_appointment.patient_email,
+                subject=f"Appointment Confirmed at {new_appointment.doctor.hospital.name}",
+                template='emails/confirmation.html',
+                appointment=new_appointment
+            )
+            # Schedule a reminder for the future
+            schedule_appointment_reminders(new_appointment)
+        except Exception as e:
+            print(f"NOTIFICATION ERROR for appt {new_appointment.id}: {e}")
+
+        # Step 4: Send Success Response to Frontend
         response_data = {
             'success': True, 
-            'message': 'Appointment booked successfully!',
-            'new_user': (not patient.profiles) # True if a new user was just created
+            'message': 'Appointment booked successfully! A confirmation email has been sent.',
+            'new_user': is_new_user
         }
-            
         return jsonify(response_data)
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error booking appointment: {e}")
-        return jsonify({'success': False, 'message': 'An error occurred. Please check your details and try again.'}), 500
-# --- THE CRITICAL CHANGE: THE LOGIN ROUTE ---
+        print(f"CRITICAL BOOKING ERROR: {e}")
+        return jsonify({'success': False, 'message': 'An error occurred while booking. Please check your details and try again.'}), 500
+
+
+@app.route('/cancel_appointment/<int:appt_id>', methods=['POST'])
+def cancel_appointment(appt_id):
+    """
+    Handles a patient's request to cancel an appointment.
+    - Updates the appointment status to 'Cancelled'.
+    - Removes any pending scheduled reminders for that appointment.
+    """
+    # Security: Ensure a patient is logged in
+    if 'user_id' not in session or session.get('user_type') != 'patient':
+        flash("You must be logged in to manage appointments.", "danger")
+        return redirect(url_for('patient_login'))
+    
+    # Find the appointment and ensure it belongs to the logged-in patient
+    appointment_to_cancel = Appointment.query.filter_by(
+        id=appt_id, 
+        patient_id=session['user_id']
+    ).first()
+
+    if appointment_to_cancel:
+        # Step 1: Update the appointment status
+        appointment_to_cancel.status = 'Cancelled'
+        
+        # Step 2: Cancel any scheduled reminders for this appointment
+        cancel_scheduled_reminders(appointment_to_cancel.id)
+        
+        db.session.commit()
+        flash("Your appointment has been successfully cancelled.", "success")
+    else:
+        flash("Appointment not found or you do not have permission to cancel it.", "danger")
+
+    return redirect(url_for('patient_dashboard'))# --- THE CRITICAL CHANGE: THE LOGIN ROUTE ---
 @app.route("/login")
 def login():
     # When a user clicks a "Login" button on your main page,
@@ -609,28 +723,7 @@ def patient_dashboard():
         now=datetime.utcnow() 
     )
 # --- ADD THIS NEW ROUTE for cancelling appointments ---
-@app.route('/cancel_appointment/<int:appt_id>', methods=['POST'])
-def cancel_appointment(appt_id):
-    # Security: Ensure a patient is logged in
-    if 'user_id' not in session or session.get('user_type') != 'patient':
-        return redirect(url_for('patient_login'))
-    
-    # Find the appointment and ensure it belongs to the logged-in patient
-    appointment_to_cancel = Appointment.query.filter_by(
-        id=appt_id, 
-        patient_id=session['user_id']
-    ).first()
 
-    if appointment_to_cancel:
-        # Instead of deleting, it's better to update the status.
-        # This keeps a record that the appointment existed.
-        appointment_to_cancel.status = 'Cancelled'
-        db.session.commit()
-        flash("Your appointment has been successfully cancelled.", "success")
-    else:
-        flash("Appointment not found or you do not have permission to cancel it.", "danger")
-
-    return redirect(url_for('patient_dashboard'))
 # --- ADD a new route to serve the uploaded files securely ---
 from flask import send_from_directory
 

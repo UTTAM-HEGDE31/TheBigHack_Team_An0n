@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Appointment Reminder</title>
+</head>
+<body style="font-family: sans-serif; color: #333;">
+    <h2>Appointment Reminder</h2>
+    <p>Hello {{ appointment.patient_name }},</p>
+    <p>This is a friendly reminder for your upcoming appointment tomorrow.</p>
+    <hr>
+    <h3>Details:</h3>
+    <ul>
+        <li><strong>Doctor:</strong> Dr. {{ appointment.doctor.name }} ({{ appointment.doctor.specialization }})</li>
+        <li><strong>Hospital:</strong> {{ appointment.doctor.hospital.name }}</li>
+        <li><strong>Date:</strong> {{ appointment.appointment_date.strftime('%A, %d %B %Y') }}</li>
+        <li><strong>Time:</strong> {{ appointment.appointment_time }}</li>
+    </ul>
+    <hr>
+    <p>We look forward to seeing you.</p>
+</body>
+</html>

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Appointment Confirmation</title>
+</head>
+<body style="font-family: sans-serif; color: #333;">
+    <h2>Appointment Confirmed!</h2>
+    <p>Hello {{ appointment.patient_name }},</p>
+    <p>This is a confirmation that your appointment has been successfully booked.</p>
+    <hr>
+    <h3>Details:</h3>
+    <ul>
+        <li><strong>Doctor:</strong> Dr. {{ appointment.doctor.name }} ({{ appointment.doctor.specialization }})</li>
+        <li><strong>Hospital:</strong> {{ appointment.doctor.hospital.name }}</li>
+        <li><strong>Date:</strong> {{ appointment.appointment_date.strftime('%A, %d %B %Y') }}</li>
+        <li><strong>Time:</strong> {{ appointment.appointment_time }}</li>
+    </ul>
+    <hr>
+    <p>If you need to cancel or reschedule, please log in to your dashboard.</p>
+    <p>Thank you for choosing AnoN Healthcare.</p>
+</body>
+</html>
