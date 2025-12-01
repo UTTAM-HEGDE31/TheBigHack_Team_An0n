@@ -230,10 +230,4 @@ This project is created for educational and hackathon purposes.
 For questions or issues during the hackathon, please reach out to the team via the submission portal.
 
 ---
-<img width="1891" height="894" alt="Screenshot 2025-12-01 121054" src="https://github.com/user-attachments/assets/25686719-e29b-47d3-b67c-48c591ea9510" />
-
-
-
-
-
 **Made with ❤️ by Team An0n**
